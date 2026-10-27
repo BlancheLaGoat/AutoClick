@@ -39,6 +39,32 @@ final class Prefs {
                 .apply();
     }
 
+    // --- Mode anti-détection ("humain")
+    private static final String K_HUMAN = "human";
+    private static final String K_JITTER = "jitter_dp";
+    private static final String K_VARIANCE = "variance_pct";
+    private static final String K_PAUSES = "pauses";
+
+    boolean human() { return sp.getBoolean(K_HUMAN, false); }
+
+    /** Rayon de dispersion autour de la cible (dp). */
+    int jitter() { return Math.max(0, sp.getInt(K_JITTER, 6)); }
+
+    /** Variation aléatoire du rythme et de la durée d'appui (%). */
+    int variance() { return Math.min(90, Math.max(0, sp.getInt(K_VARIANCE, 30))); }
+
+    /** Petites pauses aléatoires de temps en temps. */
+    boolean pauses() { return sp.getBoolean(K_PAUSES, true); }
+
+    void saveHuman(boolean on, int jitterDp, int variancePct, boolean pauses) {
+        sp.edit()
+                .putBoolean(K_HUMAN, on)
+                .putInt(K_JITTER, Math.max(0, jitterDp))
+                .putInt(K_VARIANCE, Math.min(90, Math.max(0, variancePct)))
+                .putBoolean(K_PAUSES, pauses)
+                .apply();
+    }
+
     int panelX() { return sp.getInt(K_PANEL_X, 0); }
     int panelY() { return sp.getInt(K_PANEL_Y, 300); }
 

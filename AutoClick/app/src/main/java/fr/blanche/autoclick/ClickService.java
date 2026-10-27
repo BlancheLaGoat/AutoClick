@@ -26,6 +26,7 @@ import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 
 /**
  * Service d'accessibilité : affiche la bulle de contrôle + les cibles,
@@ -61,6 +62,12 @@ public class ClickService extends AccessibilityService {
     private long clicksDone;
     private long startedAt;
     private int interval, press, limit;
+
+    // Mode anti-détection
+    private final Random rnd = new Random();
+    private boolean human, pauses;
+    private float jitterPx, variance;
+    private long nextDelay;
 
     // ------------------------------------------------------------ cycle de vie
 
@@ -265,6 +272,10 @@ public class ClickService extends AccessibilityService {
         interval = prefs.interval();
         press = prefs.press();
         limit = prefs.count();
+        human = prefs.human();
+        pauses = prefs.pauses();
+        jitterPx = dp(prefs.jitter());
+        variance = prefs.variance() / 100f;
 
         points = new float[targets.size()][2];
         int[] loc = new int[2];
@@ -303,20 +314,49 @@ public class ClickService extends AccessibilityService {
     private void dispatchBatch() {
         if (!running) return;
 
-        long period = (long) press + interval;   // temps entre deux appuis
+        long remaining = limit > 0 ? limit - clicksDone : Long.MAX_VALUE;
+        if (remaining <= 0) { stopClicking(); return; }
         int maxStrokes = GestureDescription.getMaxStrokeCount(); // 10 en général
-        // Lots courts (≈ 100 ms max) pour que le bouton stop reste réactif.
-        int n = (int) Math.max(1, Math.min(maxStrokes, 100 / period));
-        if (limit > 0) n = (int) Math.min(n, limit - clicksDone);
-        if (n <= 0) { stopClicking(); return; }
+        int screenW = getResources().getDisplayMetrics().widthPixels;
+        int screenH = getResources().getDisplayMetrics().heightPixels;
 
         GestureDescription.Builder gb = new GestureDescription.Builder();
-        for (int k = 0; k < n; k++) {
+        long t = 0;
+        int n = 0;
+        nextDelay = interval;
+        // Lots courts (≈ 100 ms max) pour que le bouton stop reste réactif.
+        while (n < maxStrokes && n < remaining && t < 100) {
+            int pr = human ? vary(press) : press;
+            int gap = human ? vary(interval) + rnd.nextInt(3) : interval;
+
             float[] p = points[nextTarget];
             nextTarget = (nextTarget + 1) % points.length;
+            float x = p[0], y = p[1];
+            if (human && jitterPx > 0) {
+                // Dispersion concentrée vers le centre (comme un vrai doigt).
+                double a = rnd.nextDouble() * Math.PI * 2;
+                double r = Math.abs(rnd.nextGaussian()) * jitterPx / 2;
+                if (r > jitterPx) r = jitterPx;
+                x += (float) (Math.cos(a) * r);
+                y += (float) (Math.sin(a) * r);
+            }
             Path path = new Path();
-            path.moveTo(p[0], p[1]);
-            gb.addStroke(new GestureDescription.StrokeDescription(path, k * period, press));
+            path.moveTo(clamp(x, screenW), clamp(y, screenH));
+            if (human) {
+                // Micro-glissement de 1-2 px pendant l'appui : un doigt n'est jamais immobile.
+                path.lineTo(clamp(x + rnd.nextFloat() * 4 - 2, screenW),
+                        clamp(y + rnd.nextFloat() * 4 - 2, screenH));
+            }
+            gb.addStroke(new GestureDescription.StrokeDescription(path, t, pr));
+            n++;
+            t += pr + gap;
+            nextDelay = gap;
+
+            if (human && pauses && rnd.nextInt(100) < 3) {
+                // ~3 % des clics : courte hésitation de 150 à 700 ms.
+                nextDelay = gap + 150 + rnd.nextInt(550);
+                break;
+            }
         }
         final int batch = n;
 
@@ -326,8 +366,8 @@ public class ClickService extends AccessibilityService {
                 clicksDone += batch;
                 if (!running) return;
                 if (limit > 0 && clicksDone >= limit) { stopClicking(); return; }
-                if (interval <= 2) dispatchBatch();          // enchaîne direct
-                else main.postDelayed(dispatchRunnable, interval);
+                if (nextDelay <= 2) dispatchBatch();          // enchaîne direct
+                else main.postDelayed(dispatchRunnable, nextDelay);
             }
 
             @Override
@@ -359,6 +399,17 @@ public class ClickService extends AccessibilityService {
     }
 
     // ------------------------------------------------------------ utilitaires
+
+    /** Valeur de base ± variance %, jamais en dessous de 1 ms. */
+    private int vary(int base) {
+        double f = 1 + rnd.nextGaussian() * variance / 2;
+        f = Math.max(1 - variance, Math.min(1 + variance, f));
+        return (int) Math.max(1, Math.round(base * f));
+    }
+
+    private static float clamp(float v, int max) {
+        return Math.max(0, Math.min(max - 1, v));
+    }
 
     private int dp(int v) {
         return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v,

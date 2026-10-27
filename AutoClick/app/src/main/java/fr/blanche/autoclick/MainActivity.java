@@ -13,6 +13,8 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.Switch;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -26,6 +28,9 @@ public class MainActivity extends Activity {
     private TextView status;
     private EditText intervalField, pressField, countField;
     private Button batteryBtn;
+    private Switch humanSwitch;
+    private CheckBox pausesBox;
+    private EditText jitterField, varianceField;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -80,8 +85,25 @@ public class MainActivity extends Activity {
                 + "qu'une fois par image, soit 60 à 120 fois par seconde). Le compteur sur la "
                 + "bulle affiche la vitesse réelle."));
 
+        // --- Anti-détection
+        root.addView(section("3. Mode anti-détection"));
+        humanSwitch = new Switch(this);
+        humanSwitch.setText("Clics « humains »");
+        humanSwitch.setChecked(prefs.human());
+        root.addView(humanSwitch);
+        jitterField = field(root, "Dispersion autour de la cible (dp)", prefs.jitter());
+        varianceField = field(root, "Irrégularité du rythme (%, 0-90)", prefs.variance());
+        pausesBox = new CheckBox(this);
+        pausesBox.setText("Petites pauses aléatoires de temps en temps");
+        pausesBox.setChecked(prefs.pauses());
+        root.addView(pausesBox);
+        root.addView(note("Chaque clic tombe à un endroit un peu différent, avec un rythme et une "
+                + "durée d'appui irréguliers et un léger mouvement du doigt. Attention : à 1 ms, "
+                + "la vitesse elle-même est surhumaine. Si une appli bloque malgré tout, monte "
+                + "la pause vers 40–100 ms (10 à 25 clics/s, rythme d'un humain rapide)."));
+
         // --- Lancer
-        root.addView(section("3. Utilisation"));
+        root.addView(section("4. Utilisation"));
         root.addView(button("Afficher la bulle", v -> {
             save();
             ClickService s = ClickService.get();
@@ -122,6 +144,8 @@ public class MainActivity extends Activity {
 
     private void save() {
         prefs.save(parse(intervalField, 1), parse(pressField, 1), parse(countField, 0));
+        prefs.saveHuman(humanSwitch.isChecked(), parse(jitterField, 6),
+                parse(varianceField, 30), pausesBox.isChecked());
     }
 
     private static int parse(EditText e, int def) {
