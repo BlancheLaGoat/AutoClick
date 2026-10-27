@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="service_description">AutoClick a besoin de ce service pour simuler des appuis à l\'écran aux positions que tu choisis. Aucune donnée n\'est lue ni envoyée : l\'appli n\'a même pas la permission Internet.</string>
+</resources>
