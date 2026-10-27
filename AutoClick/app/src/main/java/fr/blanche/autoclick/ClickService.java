@@ -128,6 +128,7 @@ public class ClickService extends AccessibilityService {
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
         prefs = new Prefs(this);
         showOverlay();
+        KeepAliveService.start(this);
     }
 
     @Override

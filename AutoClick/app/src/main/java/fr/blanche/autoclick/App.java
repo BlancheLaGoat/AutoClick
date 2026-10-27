@@ -15,6 +15,7 @@ public class App extends Application {
     public void onCreate() {
         super.onCreate();
         ClickService.tryReenable(this);
+        KeepAliveService.start(this);
     }
 
     /** Réveille l'appli au démarrage de la tablette. */
@@ -22,6 +23,7 @@ public class App extends Application {
         @Override
         public void onReceive(Context context, Intent intent) {
             ClickService.tryReenable(context);
+            KeepAliveService.start(context);
         }
     }
 }
