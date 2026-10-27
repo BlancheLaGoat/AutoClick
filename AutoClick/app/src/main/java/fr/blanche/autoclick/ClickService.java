@@ -3,7 +3,11 @@ package fr.blanche.autoclick;
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
 import android.annotation.SuppressLint;
+import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.provider.Settings;
 import android.graphics.Color;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
@@ -40,8 +44,53 @@ import java.util.Random;
 public class ClickService extends AccessibilityService {
 
     private static ClickService instance;
+    private boolean connected;
 
-    static ClickService get() { return instance; }
+    /** Le service, seulement s'il est réellement connecté au système (sinon null). */
+    static ClickService get() {
+        ClickService s = instance;
+        return (s != null && s.connected) ? s : null;
+    }
+
+    /** Le service est-il coché dans les réglages d'accessibilité ? */
+    static boolean isEnabled(Context c) {
+        String me = new ComponentName(c, ClickService.class).flattenToString();
+        String list = Settings.Secure.getString(c.getContentResolver(),
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        if (list == null) return false;
+        for (String s : list.split(":")) {
+            ComponentName cn = ComponentName.unflattenFromString(s);
+            if (cn != null && cn.flattenToString().equals(me)) return true;
+        }
+        return false;
+    }
+
+    /** L'appli a-t-elle reçu (via ADB) le droit de se réactiver toute seule ? */
+    static boolean canSelfEnable(Context c) {
+        return c.checkSelfPermission("android.permission.WRITE_SECURE_SETTINGS")
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /**
+     * Recoche le service dans les réglages d'accessibilité s'il a été décoché
+     * (par HyperOS par exemple). Ne marche que si canSelfEnable() est vrai.
+     */
+    static boolean tryReenable(Context c) {
+        if (isEnabled(c) || !canSelfEnable(c)) return false;
+        try {
+            String me = new ComponentName(c, ClickService.class).flattenToString();
+            String list = Settings.Secure.getString(c.getContentResolver(),
+                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            String value = (list == null || list.isEmpty()) ? me : list + ":" + me;
+            Settings.Secure.putString(c.getContentResolver(),
+                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, value);
+            Settings.Secure.putInt(c.getContentResolver(),
+                    Settings.Secure.ACCESSIBILITY_ENABLED, 1);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private WindowManager wm;
@@ -75,6 +124,7 @@ public class ClickService extends AccessibilityService {
     protected void onServiceConnected() {
         super.onServiceConnected();
         instance = this;
+        connected = true;
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
         prefs = new Prefs(this);
         showOverlay();
@@ -88,17 +138,19 @@ public class ClickService extends AccessibilityService {
 
     @Override
     public boolean onUnbind(Intent intent) {
+        connected = false;
         stopClicking();
         hideOverlay();
-        instance = null;
+        if (instance == this) instance = null;
         return super.onUnbind(intent);
     }
 
     @Override
     public void onDestroy() {
+        connected = false;
         stopClicking();
         hideOverlay();
-        instance = null;
+        if (instance == this) instance = null;
         super.onDestroy();
     }
 
@@ -106,9 +158,17 @@ public class ClickService extends AccessibilityService {
 
     boolean isOverlayShown() { return panel != null; }
 
-    void showOverlay() {
-        if (panel != null) return;
-        buildPanel();
+    /**
+     * Affiche la bulle et les cibles. Renvoie false si le système refuse
+     * (service plus vraiment connecté) — dans ce cas on se marque déconnecté
+     * au lieu de planter.
+     */
+    boolean showOverlay() {
+        if (panel != null) return true;
+        if (!buildPanel()) {
+            connected = false;
+            return false;
+        }
         List<int[]> saved = prefs.targets();
         if (saved.isEmpty()) {
             int w = getResources().getDisplayMetrics().widthPixels;
@@ -116,6 +176,17 @@ public class ClickService extends AccessibilityService {
             addTarget(w / 2 - dp(24), h / 2 - dp(24));
         } else {
             for (int[] p : saved) addTarget(p[0], p[1]);
+        }
+        return true;
+    }
+
+    /** addView qui ne fait jamais planter l'appli. */
+    private boolean safeAdd(View v, WindowManager.LayoutParams lp) {
+        try {
+            wm.addView(v, lp);
+            return true;
+        } catch (RuntimeException e) {   // BadTokenException & co
+            return false;
         }
     }
 
@@ -152,7 +223,7 @@ public class ClickService extends AccessibilityService {
         return lp;
     }
 
-    private void buildPanel() {
+    private boolean buildPanel() {
         panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -211,7 +282,11 @@ public class ClickService extends AccessibilityService {
         panelLp = overlayParams(prefs.panelX(), prefs.panelY());
         handle.setOnTouchListener(new DragListener(panel, panelLp, () ->
                 prefs.savePanel(panelLp.x, panelLp.y)));
-        wm.addView(panel, panelLp);
+        if (!safeAdd(panel, panelLp)) {
+            panel = null;
+            return false;
+        }
+        return true;
     }
 
     private TextView panelButton(String label) {
@@ -242,7 +317,11 @@ public class ClickService extends AccessibilityService {
         lp.width = dp(48);
         lp.height = dp(48);
         t.setOnTouchListener(new DragListener(t, lp, this::saveTargets));
-        wm.addView(t, lp);
+        if (!safeAdd(t, lp)) {
+            connected = false;
+            Toast.makeText(this, "Service déconnecté : rouvre AutoClick", Toast.LENGTH_LONG).show();
+            return;
+        }
         targets.add(t);
         targetLps.add(lp);
     }
@@ -360,7 +439,21 @@ public class ClickService extends AccessibilityService {
         }
         final int batch = n;
 
-        boolean ok = dispatchGesture(gb.build(), new GestureResultCallback() {
+        boolean ok;
+        try {
+            ok = dispatchGesture(gb.build(), callbackFor(batch), main);
+        } catch (RuntimeException e) {
+            ok = false;
+        }
+
+        if (!ok) {
+            stopClicking();
+            Toast.makeText(this, "Le système a refusé le geste", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private GestureResultCallback callbackFor(final int batch) {
+        return new GestureResultCallback() {
             @Override
             public void onCompleted(GestureDescription g) {
                 clicksDone += batch;
@@ -375,12 +468,7 @@ public class ClickService extends AccessibilityService {
                 // Annulé (ex : tu as touché l'écran) → on reprend un peu après.
                 if (running) main.postDelayed(dispatchRunnable, 30);
             }
-        }, main);
-
-        if (!ok) {
-            stopClicking();
-            Toast.makeText(this, "Le système a refusé le geste", Toast.LENGTH_SHORT).show();
-        }
+        };
     }
 
     private final Runnable counterTick = new Runnable() {

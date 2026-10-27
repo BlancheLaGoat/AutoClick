@@ -28,6 +28,7 @@ public class MainActivity extends Activity {
     private TextView status;
     private EditText intervalField, pressField, countField;
     private Button batteryBtn;
+    private TextView selfEnableStatus;
     private Switch humanSwitch;
     private CheckBox pausesBox;
     private EditText jitterField, varianceField;
@@ -74,6 +75,14 @@ public class MainActivity extends Activity {
         root.addView(batteryBtn);
         root.addView(note("Évite qu'Android coupe le service en arrière-plan (c'est souvent pour "
                 + "ça que les autoclickers « arrêtent de marcher »)."));
+        selfEnableStatus = new TextView(this);
+        selfEnableStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        selfEnableStatus.setPadding(0, dp(10), 0, dp(2));
+        root.addView(selfEnableStatus);
+        root.addView(note("Optionnel, une seule fois depuis un PC (ADB) : permet à AutoClick de "
+                + "recocher tout seul son service quand HyperOS le décoche.\n"
+                + "adb shell pm grant fr.blanche.autoclick "
+                + "android.permission.WRITE_SECURE_SETTINGS"));
 
         // --- Réglages
         root.addView(section("2. Réglages"));
@@ -107,12 +116,18 @@ public class MainActivity extends Activity {
         root.addView(button("Afficher la bulle", v -> {
             save();
             ClickService s = ClickService.get();
-            if (s == null) {
-                Toast.makeText(this, "Active d'abord le service d'accessibilité",
-                        Toast.LENGTH_LONG).show();
+            if (s == null || !s.showOverlay()) {
+                if (ClickService.tryReenable(this)) {
+                    Toast.makeText(this, "Service réactivé, la bulle va apparaître",
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+                Toast.makeText(this, ClickService.isEnabled(this)
+                        ? "Le service ne répond plus : désactive puis réactive AutoClick"
+                        : "Active le service AutoClick", Toast.LENGTH_LONG).show();
+                startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
                 return;
             }
-            s.showOverlay();
             moveTaskToBack(true);
         }));
         root.addView(note("Bulle : ✥ déplacer · ▶/■ lancer/arrêter · + / − ajouter/retirer une "
@@ -127,7 +142,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        boolean on = ClickService.get() != null;
+        ClickService.tryReenable(this);
+        boolean auto = ClickService.canSelfEnable(this);
+        selfEnableStatus.setText(auto ? "Réactivation automatique : active ✓"
+                : "Réactivation automatique : non configurée");
+        boolean on = ClickService.get() != null || ClickService.isEnabled(this);
         status.setText(on ? "● Service actif" : "○ Service inactif — active-le à l'étape 1");
         status.setTextColor(on ? 0xFF4ADE80 : 0xFFFF4D6D);
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
