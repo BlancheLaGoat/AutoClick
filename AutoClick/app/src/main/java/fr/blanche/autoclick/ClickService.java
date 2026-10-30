@@ -129,13 +129,26 @@ public class ClickService extends AccessibilityService {
         prefs = new Prefs(this);
         showOverlay();
         KeepAliveService.start(this);
+        // Si on cliquait quand le système a coupé l'appli, on reprend tout seul
+        // (petit délai : les cibles doivent d'abord être placées à l'écran).
+        if (prefs.wasRunning()) {
+            main.postDelayed(() -> {
+                if (connected && !running && prefs.wasRunning() && !targets.isEmpty()) {
+                    startClicking();
+                    Toast.makeText(this, "AutoClick : reprise des clics", Toast.LENGTH_SHORT).show();
+                }
+            }, 1500);
+        }
     }
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) { /* rien à lire */ }
 
     @Override
-    public void onInterrupt() { stopClicking(); }
+    public void onInterrupt() {
+        // Signal envoyé par certains systèmes (HyperOS) sans raison utile pour nous :
+        // on l'ignore au lieu d'arrêter les clics.
+    }
 
     @Override
     public boolean onUnbind(Intent intent) {
@@ -256,7 +269,7 @@ public class ClickService extends AccessibilityService {
         panel.addView(settings);
         panel.addView(close);
 
-        playBtn.setOnClickListener(v -> { if (running) stopClicking(); else startClicking(); });
+        playBtn.setOnClickListener(v -> { if (running) stopByUser(); else startClicking(); });
         plus.setOnClickListener(v -> {
             if (running) return;
             int w = getResources().getDisplayMetrics().widthPixels;
@@ -273,12 +286,12 @@ public class ClickService extends AccessibilityService {
             saveTargets();
         });
         settings.setOnClickListener(v -> {
-            stopClicking();
+            stopByUser();
             Intent i = new Intent(this, MainActivity.class);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(i);
         });
-        close.setOnClickListener(v -> hideOverlay());
+        close.setOnClickListener(v -> { stopByUser(); hideOverlay(); });
 
         panelLp = overlayParams(prefs.panelX(), prefs.panelY());
         handle.setOnTouchListener(new DragListener(panel, panelLp, () ->
@@ -368,6 +381,7 @@ public class ClickService extends AccessibilityService {
 
         setTargetsPassThrough(true);
         running = true;
+        prefs.setWasRunning(true);
         refusals = 0;
         nextTarget = 0;
         clicksDone = 0;
@@ -376,6 +390,12 @@ public class ClickService extends AccessibilityService {
         playBtn.setTextColor(0xFFFF4D6D);
         main.post(counterTick);
         dispatchBatch();
+    }
+
+    /** Arrêt voulu (bouton, limite atteinte) : on ne reprendra pas tout seul. */
+    void stopByUser() {
+        prefs.setWasRunning(false);
+        stopClicking();
     }
 
     void stopClicking() {
@@ -396,7 +416,7 @@ public class ClickService extends AccessibilityService {
         if (!running) return;
 
         long remaining = limit > 0 ? limit - clicksDone : Long.MAX_VALUE;
-        if (remaining <= 0) { stopClicking(); return; }
+        if (remaining <= 0) { stopByUser(); return; }
         int maxStrokes = GestureDescription.getMaxStrokeCount(); // 10 en général
         int screenW = getResources().getDisplayMetrics().widthPixels;
         int screenH = getResources().getDisplayMetrics().heightPixels;
@@ -484,7 +504,7 @@ public class ClickService extends AccessibilityService {
                 main.removeCallbacks(stallGuard);
                 clicksDone += batch;
                 if (!running) return;
-                if (limit > 0 && clicksDone >= limit) { stopClicking(); return; }
+                if (limit > 0 && clicksDone >= limit) { stopByUser(); return; }
                 if (nextDelay <= 2) dispatchBatch();          // enchaîne direct
                 else main.postDelayed(dispatchRunnable, nextDelay);
             }

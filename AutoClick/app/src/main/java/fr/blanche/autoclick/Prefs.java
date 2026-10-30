@@ -65,6 +65,13 @@ final class Prefs {
                 .apply();
     }
 
+    // --- Reprise automatique après un arrêt forcé par le système
+    private static final String K_WAS_RUNNING = "was_running";
+
+    boolean wasRunning() { return sp.getBoolean(K_WAS_RUNNING, false); }
+
+    void setWasRunning(boolean v) { sp.edit().putBoolean(K_WAS_RUNNING, v).commit(); }
+
     int panelX() { return sp.getInt(K_PANEL_X, 0); }
     int panelY() { return sp.getInt(K_PANEL_Y, 300); }
 
