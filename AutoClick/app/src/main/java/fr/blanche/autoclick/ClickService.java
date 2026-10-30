@@ -368,6 +368,7 @@ public class ClickService extends AccessibilityService {
 
         setTargetsPassThrough(true);
         running = true;
+        refusals = 0;
         nextTarget = 0;
         clicksDone = 0;
         startedAt = SystemClock.uptimeMillis();
@@ -439,24 +440,48 @@ public class ClickService extends AccessibilityService {
             }
         }
         final int batch = n;
+        final int myGen = ++gestureGen;
+
+        // Garde-fou : si le système "perd" le geste (aucune réponse, ni terminé ni
+        // annulé — ça arrive sous HyperOS quand la tablette est chargée), on relance
+        // nous-mêmes au lieu de rester bloqué indéfiniment.
+        main.removeCallbacks(stallGuard);
+        main.postDelayed(stallGuard, t + 1000);
 
         boolean ok;
         try {
-            ok = dispatchGesture(gb.build(), callbackFor(batch), main);
+            ok = dispatchGesture(gb.build(), callbackFor(batch, myGen), main);
         } catch (RuntimeException e) {
             ok = false;
         }
 
-        if (!ok) {
+        if (ok) {
+            refusals = 0;
+        } else if (++refusals <= 20) {
+            // Refus passager (tablette surchargée) → on réessaie un peu plus tard.
+            main.removeCallbacks(stallGuard);
+            main.postDelayed(dispatchRunnable, 250);
+        } else {
             stopClicking();
-            Toast.makeText(this, "Le système a refusé le geste", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Le système refuse les clics", Toast.LENGTH_SHORT).show();
         }
     }
 
-    private GestureResultCallback callbackFor(final int batch) {
+    private int gestureGen;
+    private int refusals;
+
+    private final Runnable stallGuard = () -> {
+        if (!running) return;
+        gestureGen++;          // ignore la réponse tardive du geste perdu
+        dispatchBatch();
+    };
+
+    private GestureResultCallback callbackFor(final int batch, final int myGen) {
         return new GestureResultCallback() {
             @Override
             public void onCompleted(GestureDescription g) {
+                if (myGen != gestureGen) return;   // geste déjà considéré perdu
+                main.removeCallbacks(stallGuard);
                 clicksDone += batch;
                 if (!running) return;
                 if (limit > 0 && clicksDone >= limit) { stopClicking(); return; }
@@ -466,6 +491,8 @@ public class ClickService extends AccessibilityService {
 
             @Override
             public void onCancelled(GestureDescription g) {
+                if (myGen != gestureGen) return;
+                main.removeCallbacks(stallGuard);
                 // Annulé (ex : tu as touché l'écran) → on reprend un peu après.
                 if (running) main.postDelayed(dispatchRunnable, 30);
             }
